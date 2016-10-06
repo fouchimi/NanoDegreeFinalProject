@@ -2,4 +2,8 @@
     <string name="app_name">Final</string>
     <string name="action_search">Search</string>
     <string name="search_hint">Search nearby places</string>
+    <string name="ok_button">Ok</string>
+    <string name="str_bicycling">Bicycling</string>
+    <string name="str_driving">Driving</string>
+    <string name="str_walking">Walking</string>
 </resources>

@@ -14,12 +14,16 @@ import android.util.Log;
 import android.view.Menu;
 import android.view.View;
 import android.widget.EditText;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.RelativeLayout;
+import android.widget.Toast;
 
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.common.api.Status;
 import com.google.android.gms.location.LocationListener;
+import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.location.places.ui.PlaceAutocompleteFragment;
 import com.google.android.gms.location.places.ui.PlaceSelectionListener;
@@ -68,10 +72,20 @@ public class MainActivity extends AppCompatActivity implements
     List<Marker> markers = new ArrayList<>();
     private LatLng mDestLatLng = null;
     private Polyline polylines = null;
+    private LocationRequest mLocationRequest = null;
+    private boolean isZoomed = false;
+    RadioGroup radioGroup;
+    boolean dialogBoxShown = false;
+    String distance = null;
+    String duration = null;
+    private Marker mDestMarker = null;
+    private Marker mStartMarker = null;
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        radioGroup = (RadioGroup) findViewById(R.id.rg_modes);
 
         mGoogleApiClient = new GoogleApiClient.Builder(this)
                 .addApi(LocationServices.API)
@@ -104,28 +118,18 @@ public class MainActivity extends AppCompatActivity implements
                 view.setVisibility(View.GONE);
                 try {
                     new RandomAccessFile(tempFile, "rw").setLength(0);
-                    if(polylines != null) polylines.remove();
+                    if(polylines != null) {
+                        polylines.remove();
+                        mDestMarker = null;
+                    }
                     mGoogleMap.clear();
                     markers.clear();
-                    if(mLatLng != null) {
-                        displayCurrent();
-                    }else {
-                        mLocation = LocationServices.FusedLocationApi.getLastLocation(mGoogleApiClient);
-                        if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-                                ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                            String[] permissions = {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
-                            ActivityCompat.requestPermissions(MainActivity.this, permissions, REQUEST_CODE);
-                            return;
-                        }
-                        if(mLocation!= null) {
-                            mLatLng = new LatLng(mLocation.getLatitude(), mLocation.getLongitude());
-                            displayCurrent();
-                        }
-                    }
+                    requestCurrentLocation();
+                    displayCurrent();
+                    moveToCurrentPosition();
                 } catch (FileNotFoundException e) {
                     e.printStackTrace();
                 }catch (IOException e){
-
                 }
             }
         });
@@ -133,12 +137,12 @@ public class MainActivity extends AppCompatActivity implements
         autocompleteFragment.setOnPlaceSelectedListener(new PlaceSelectionListener() {
             @Override
             public void onPlaceSelected(com.google.android.gms.location.places.Place place) {
-                if(markers.size() >= 2) {
-                    markers.get(1).remove();
-                    if(polylines != null) polylines.remove();
-                    mGoogleMap.clear();
-                    displayCurrent();
+                try {
+                    new RandomAccessFile(tempFile, "rw").setLength(0);
+                } catch (IOException e) {
+                    e.printStackTrace();
                 }
+                cleanMapAndReset();
                 PlaceItem dest = new PlaceItem(place.getLatLng().latitude,
                         place.getLatLng().longitude,
                         place.getName().toString());
@@ -147,7 +151,9 @@ public class MainActivity extends AppCompatActivity implements
                 mDestLatLng = new LatLng(dest.getLat(), dest.getLng());
                 displayOnMap(mDestLatLng, place.getName().toString());
                 zoomMap();
-                getWayPoints(mLatLng, mDestLatLng);
+                dialogBoxShown = false;
+                getWayPoints(mLatLng, mDestLatLng, getTravelMode());
+                isZoomed = false;
             }
 
             @Override
@@ -156,20 +162,52 @@ public class MainActivity extends AppCompatActivity implements
             }
 
         });
+
+        radioGroup.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(RadioGroup group, int checkedId) {
+                if(mDestMarker != null){
+                    polylines.remove();
+                    if(mLatLng != null && mDestLatLng != null) {
+                        getWayPoints(mLatLng, mDestLatLng, getTravelMode());
+                        zoomMap();
+                        showTravelDetails();
+                    }
+                }
+            }
+        });
+    }
+
+    private void cleanMapAndReset() {
+        mGoogleMap.clear();
+        markers.clear();
+        requestCurrentLocation();
+        displayCurrent();
+        moveToCurrentPosition();
     }
 
     private void moveToCurrentPosition(){
         if(mLatLng != null){
-            CameraUpdate cameraUpdate = CameraUpdateFactory.newLatLngZoom(mLatLng, 15);
+            CameraUpdate cameraUpdate = CameraUpdateFactory.newLatLngZoom(mLatLng, 10);
             mGoogleMap.animateCamera(cameraUpdate);
         }
     }
 
-    private void getWayPoints(LatLng origin, LatLng destination){
+    private String getTravelMode(){
+        int radioButtonID = radioGroup.getCheckedRadioButtonId();
+        View radioButton = radioGroup.findViewById(radioButtonID);
+        int idx = radioGroup.indexOfChild(radioButton);
+        RadioButton r = (RadioButton)  radioGroup.getChildAt(idx);
+        String selectedtext = r.getText().toString();
+        return selectedtext;
+    }
+
+    private void getWayPoints(LatLng origin, LatLng destination, String mode){
         FetchNearbyPlacesAsyncTask task = new FetchNearbyPlacesAsyncTask(this);
         StringBuilder builder = new StringBuilder(BASE_URL);
         builder.append("origin=" + new CustomLatLng(origin.latitude, origin.longitude).toString());
         builder.append("&destination=" + new CustomLatLng(destination.latitude, destination.longitude).toString());
+        builder.append("&mode=" + mode.toLowerCase());
         builder.append("&API_KEY="+ Constants.API_KEY.getValue());
         String url = builder.toString();
         Log.d("URL", url);
@@ -182,9 +220,13 @@ public class MainActivity extends AppCompatActivity implements
             builder.include(marker.getPosition());
         }
         LatLngBounds bounds = builder.build();
-        int padding = 15;
-        CameraUpdate cu = CameraUpdateFactory.newLatLngBounds(bounds, padding);
-        mGoogleMap.animateCamera(cu);
+        if(!isZoomed) {
+            int padding = 0;
+            CameraUpdate cu = CameraUpdateFactory.newLatLngBounds(bounds, padding);
+            mGoogleMap.setMaxZoomPreference(13f);
+            mGoogleMap.animateCamera(cu);
+            isZoomed = true;
+        }
     }
 
     private void saveDestination(PlaceItem dest){
@@ -199,19 +241,21 @@ public class MainActivity extends AppCompatActivity implements
     }
 
     private void displayOnMap(LatLng latLng, String placeName){
-        Marker destinationMarker = mGoogleMap.addMarker(new MarkerOptions()
+        mDestMarker = mGoogleMap.addMarker(new MarkerOptions()
                 .position(latLng)
                 .title(placeName)
                 .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED)));
-        markers.add(destinationMarker);
+        markers.clear();
+        displayCurrent();
+        markers.add(mDestMarker);
     }
 
     private void displayCurrent(){
-        Marker start = mGoogleMap.addMarker(new MarkerOptions()
+        mStartMarker = mGoogleMap.addMarker(new MarkerOptions()
                 .position(mLatLng)
                 .title("You're here")
                 .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)));
-        markers.add(start);
+        markers.add(mStartMarker);
     }
 
     private PlaceItem getDestination(){
@@ -232,39 +276,6 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         getMenuInflater().inflate(R.menu.main_menu, menu);
-        /*MenuItem searchItem = menu.findItem(R.id.action_search);
-        SearchView searchView = (SearchView)
-                MenuItemCompat.getActionView(searchItem);
-        SearchManager searchManager = (SearchManager)
-                getSystemService(Context.SEARCH_SERVICE);
-        ComponentName componentName = new ComponentName(this, MainActivity.class);
-        searchView.setSearchableInfo(searchManager.getSearchableInfo(componentName));
-
-        searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
-            @Override
-            public boolean onQueryTextSubmit(String query) {
-                Toast.makeText(MainActivity.this, query, Toast.LENGTH_LONG).show();
-                Log.d(TAG, query);
-                searched = true;
-                FetchNearbyPlacesAsyncTask fetchNearbyPlacesAsyncTask = new FetchNearbyPlacesAsyncTask(MainActivity.this);
-                query = query.trim();
-                String fullUrlQuery = BASE_URL + "query=" + query;
-                fullUrlQuery += "&location=" + String.valueOf(mLatLng.latitude).toString() + "," + String.valueOf(mLatLng.longitude).toString();
-                fullUrlQuery += "&key=" + Constants.API_KEY.getValue().toString();
-                Log.d(TAG, fullUrlQuery);
-                fetchNearbyPlacesAsyncTask.execute(fullUrlQuery);
-                return true;
-            }
-
-            @Override
-            public boolean onQueryTextChange(String newText) {
-                if (newText.isEmpty()) {
-                    searched = false;
-                }
-                return searched;
-            }
-        }); */
-
         return super.onCreateOptionsMenu(menu);
     }
 
@@ -285,27 +296,20 @@ public class MainActivity extends AppCompatActivity implements
 
     @Override
     public void onConnected(@Nullable Bundle bundle) {
-        mLocation = LocationServices.FusedLocationApi.getLastLocation(mGoogleApiClient);
-        if(mLocation!= null){
-            mLatLng = new LatLng(mLocation.getLatitude(), mLocation.getLongitude());
-            mGoogleMap.clear();
-            displayCurrent();
-            moveToCurrentPosition();
-            PlaceItem dest = getDestination();
-            if(dest != null){
-                mDestLatLng = new LatLng(dest.getLat(), dest.getLng());
-                displayOnMap(mDestLatLng, dest.getName());
-                getWayPoints(mLatLng, mDestLatLng);
-                zoomMap();
-            }
-        }
+        requestCurrentLocation();
+    }
+
+    private void requestCurrentLocation() {
+        mLocationRequest = LocationRequest.create();
+        mLocationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+        mLocationRequest.setInterval(60000);
         if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
                 ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             String[] permissions = {Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION};
             ActivityCompat.requestPermissions(MainActivity.this, permissions, REQUEST_CODE);
             return;
         }
-
+        LocationServices.FusedLocationApi.requestLocationUpdates(mGoogleApiClient, mLocationRequest, this);
     }
 
 
@@ -321,7 +325,21 @@ public class MainActivity extends AppCompatActivity implements
 
     @Override
     public void onLocationChanged(Location location) {
-        Log.d(TAG, "Location changed");
+        mLocation = location;
+        if(mLocation!= null){
+            mLatLng = new LatLng(mLocation.getLatitude(), mLocation.getLongitude());
+            mGoogleMap.clear();
+            displayCurrent();
+            PlaceItem dest = getDestination();
+            if(dest != null){
+                mDestLatLng = new LatLng(dest.getLat(), dest.getLng());
+                displayOnMap(mDestLatLng, dest.getName());
+                getWayPoints(mLatLng, mDestLatLng, getTravelMode());
+                zoomMap();
+            }else {
+                moveToCurrentPosition();
+            }
+        }
     }
 
     @Override
@@ -347,30 +365,41 @@ public class MainActivity extends AppCompatActivity implements
 
             List<HashMap<String, String>> path = routes.get(i);
 
+            distance = path.get(0).get("distance");
+            duration = path.get(0).get("duration");
+
             for (int j = 0; j < path.size(); j++) {
                 HashMap<String, String> point = path.get(j);
 
                 double lat = Double.parseDouble(point.get("lat"));
                 double lng = Double.parseDouble(point.get("lng"));
                 LatLng position = new LatLng(lat, lng);
-
                 points.add(position);
             }
 
             lineOptions.addAll(points);
             lineOptions.width(15);
             lineOptions.color(Color.RED);
+            lineOptions.geodesic(true);
 
             Log.d("onPostExecute","onPostExecute lineoptions decoded");
-
         }
 
         if(lineOptions != null) {
             polylines = mGoogleMap.addPolyline(lineOptions);
+            if(!dialogBoxShown) {
+                showTravelDetails();
+                dialogBoxShown = true;
+            }
         }
         else {
             Log.d("onPostExecute","without Polylines drawn");
         }
+    }
 
+    private void showTravelDetails() {
+        Toast.makeText(this, "Travel Summary " + getTravelMode() + "\n"
+                 + "Distance: " + distance + "\n" +
+                "Duration: " + duration, Toast.LENGTH_LONG ).show();
     }
 }

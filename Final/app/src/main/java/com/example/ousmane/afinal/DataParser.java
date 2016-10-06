@@ -22,6 +22,9 @@ public class DataParser {
         JSONArray jRoutes;
         JSONArray jLegs;
         JSONArray jSteps;
+        String duration;
+        String distance;
+        HashMap<String, String> hm = null;
         try {
             jRoutes = jObject.getJSONArray("routes");
 
@@ -31,15 +34,19 @@ public class DataParser {
 
                 for(int j=0;j<jLegs.length();j++){
                     jSteps = ( (JSONObject)jLegs.get(j)).getJSONArray("steps");
+                    duration =  ( (JSONObject)jLegs.get(j)).getJSONObject("duration").getString("text");
+                    distance =  ( (JSONObject)jLegs.get(j)).getJSONObject("distance").getString("text");
                     for(int k=0;k<jSteps.length();k++){
                         String polyline = "";
                         polyline = (String)((JSONObject)((JSONObject)jSteps.get(k)).get("polyline")).get("points");
                         List<LatLng> list = decodePoly(polyline);
 
                         for(int l=0;l<list.size();l++){
-                            HashMap<String, String> hm = new HashMap<>();
+                            hm = new HashMap<>();
                             hm.put("lat", Double.toString((list.get(l)).latitude) );
                             hm.put("lng", Double.toString((list.get(l)).longitude) );
+                            hm.put("duration", duration);
+                            hm.put("distance", distance);
                             path.add(hm);
                         }
                     }
